@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Azure Data Pipeline for Movie Metrics</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; margin: 20px; }
+        h1, h2, h3, h4 { color: #333; }
+        code { background: #f4f4f4; padding: 2px 4px; border-radius: 4px; }
+        pre { background: #f4f4f4; padding: 10px; border-radius: 4px; overflow-x: auto; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        ul, ol { margin-bottom: 20px; }
+        a { color: #0066cc; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+
+<h1>Azure Data Pipeline for Movie Metrics</h1>
+
+<p>This repository contains the implementation of a data pipeline that processes movie-related events from Azure Event Hub, using Databricks for structured streaming, Delta Lake for storage, and Cosmos DB for serving analytics. The pipeline ingests raw Avro data captured from Event Hub, transforms it through Bronze, Silver, and Gold layers, applies deduplication and windowed aggregations, and outputs metrics like average IMDb scores and movie counts.</p>
+
+<p>The pipeline is designed for reliability, exactly-once processing, and handling late-arriving data, making it suitable for real-time analytics on movie data (e.g., events with fields like <code>order_id</code>, <code>event_time</code>, <code>imdb_score</code>).</p>
+
+<h2>Table of Contents</h2>
+<ul>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="#prerequisites">Prerequisites</a></li>
+    <li><a href="#setup-and-installation">Setup and Installation</a></li>
+    <li><a href="#databricks-queries-handbook">Databricks Queries Handbook</a></li>
+    <li><a href="#bronzesilvergold-layer-mapping">Bronze/Silver/Gold Layer Mapping</a></li>
+    <li><a href="#query-flow-diagram">Query Flow Diagram</a></li>
+    <li><a href="#production-checklist">Production Checklist</a></li>
+    <li><a href="#troubleshooting">Troubleshooting</a></li>
+    <li><a href="#contributing">Contributing</a></li>
+    <li><a href="#license">License</a></li>
+</ul>
+
+<h2 id="overview">Overview</h2>
+
+<p>This project demonstrates a complete end-to-end data pipeline on Azure, focusing on real-time streaming processing for movie metrics. Key features include:</p>
+
+<ul>
+    <li><strong>Ingestion</strong>: Azure Event Hub captures events in Avro format and stores them in Azure Data Lake Storage (ADLS).</li>
+    <li><strong>Processing</strong>: Databricks uses Structured Streaming to read, parse, deduplicate, aggregate, and write data to Delta Lake.</li>
+    <li><strong>Storage</strong>: Delta Lake for ACID-compliant, versioned storage of processed data.</li>
+    <li><strong>Serving</strong>: Cosmos DB for low-latency querying of aggregated metrics.</li>
+    <li><strong>Event-Time Handling</strong>: Watermarking and windowing to manage late data and infinite streams.</li>
+    <li><strong>Exactly-Once Semantics</strong>: Deduplication and checkpointing to ensure data integrity.</li>
+</ul>
+
+<p>The pipeline processes events with a schema including <code>order_id</code>, <code>event_time</code>, <code>imdb_score</code>, etc., aggregating them into 5-minute windows for metrics like average IMDb score and movie count.</p>
+
+<p>This README is comprehensive, covering all aspects without cutting corners, including detailed query explanations, diagrams, and checklists.</p>
+
+<h2 id="architecture">Architecture</h2>
+
+<p>The pipeline follows a medallion architecture (Bronze → Silver → Gold):</p>
+
+<ol>
+    <li><strong>Event Hub Capture</strong>: Events are captured and written as Avro files to ADLS.</li>
+    <li><strong>Databricks Streaming Job</strong>:
+        <ul>
+            <li>Reads raw Avro from ADLS (Bronze).</li>
+            <li>Parses JSON payload and casts types (Silver).</li>
+            <li>Applies watermark, deduplicates, and aggregates (Gold).</li>
+        </ul>
+    </li>
+    <li><strong>Delta Lake</strong>: Stores Gold-layer aggregates for querying.</li>
+    <li><strong>Cosmos DB</strong>: Batch write of Gold data for operational serving.</li>
+    <li><strong>Downstream Consumers</strong>: BI tools (e.g., Power BI via Fabric) can query Delta or Cosmos DB.</li>
+</ol>
+
+<p>High-level flow:</p>
+<ul>
+    <li>Infinite input stream → Transformations → Checkpointed output to Delta → Batch export to Cosmos DB.</li>
+</ul>
+
+<h2 id="prerequisites">Prerequisites</h2>
+
+<ul>
+    <li>Azure Subscription with:
+        <ul>
+            <li>Event Hub Namespace.</li>
+            <li>Azure Data Lake Storage Gen2 (ADLS) account (<code>pipelinestoragetask45</code> in examples).</li>
+            <li>Databricks Workspace.</li>
+            <li>Cosmos DB Account (with database <code>analyticsdb</code> and container <code>movie_metrics</code>).</li>
+        </ul>
+    </li>
+    <li>Databricks Runtime: 13.3 LTS or later (with Delta Lake support).</li>
+    <li>Libraries: PySpark (built-in), Avro format support.</li>
+    <li>Secrets: Cosmos DB endpoint and key stored in Databricks Secrets or Key Vault.</li>
+    <li>Sample Data: Avro files in ADLS with movie events (e.g., JSON payload in <code>Body</code> field).</li>
+</ul>
+
+<h2 id="setup-and-installation">Setup and Installation</h2>
+
+<ol>
+    <li><strong>Clone the Repository</strong>:
+        <pre><code>git clone https://github.com/yourusername/azure-movie-metrics-pipeline.git
+cd azure-movie-metrics-pipeline</code></pre>
+    </li>
+    <li><strong>Configure Azure Resources</strong>:
+        <ul>
+            <li>Create Event Hub and enable Capture to ADLS path: <code>abfss://eventhub-capture@pipelinestoragetask45.dfs.core.windows.net/event-hub45/</code>.</li>
+            <li>Set up Delta Lake paths: <code>abfss://processed@pipelinestoragetask45.dfs.core.windows.net/gold/movie_metrics</code> and checkpoint <code>abfss://processed@pipelinestoragetask45.dfs.core.windows.net/checkpoints/movie_metrics</code>.</li>
+        </ul>
+    </li>
+    <li><strong>Databricks Setup</strong>:
+        <ul>
+            <li>Create a cluster with necessary configurations (e.g., mount ADLS).</li>
+            <li>Upload notebooks from <code>/notebooks/</code> directory (create based on queries below).</li>
+            <li>Install any custom libraries if needed (e.g., Cosmos DB connector: <code>com.microsoft.azure:azure-cosmosdb-spark_2.4.0_2.11:3.6.0</code>).</li>
+        </ul>
+    </li>
+    <li><strong>Run the Pipeline</strong>:
+        <ul>
+            <li>Execute the batch validation query first.</li>
+            <li>Start the streaming job.</li>
+            <li>Monitor via Databricks UI (streaming metrics, checkpoints).</li>
+        </ul>
+    </li>
+    <li><strong>Testing</strong>:
+        <ul>
+            <li>Send sample events to Event Hub.</li>
+            <li>Verify Delta table and Cosmos DB outputs.</li>
+        </ul>
+    </li>
+</ol>
+
+<h2 id="databricks-queries-handbook">Databricks Queries Handbook</h2>
+
+<p>This section provides a query-by-query explanation, like book notes, detailing what each query does, why it exists, and how it fits in the pipeline. It includes handling scenarios like "no data in streaming."</p>
+
+<h3>Structured Streaming with Delta (Project-Specific)</h3>
+
+<h4>1. Batch Read for Validation (Pre-Streaming)</h4>
+
+<p><strong>Query</strong></p>
+<pre><code class="language-python">static_df = spark.read \
+    .format("avro") \
+    .option("recursiveFileLookup", "true") \
+    .load(
+        "abfss://eventhub-capture@pipelinestoragetask45.dfs.core.windows.net/event-hub45/"
+    )
+
+static_df.printSchema()</code></pre>
+
+<p><strong>What this query does</strong></p>
+<ul>
+    <li>Reads existing Avro files only.</li>
+    <li>Runs once (batch mode).</li>
+    <li>Infers schema from stored data.</li>
+</ul>
+
+<p><strong>Why this query is required</strong></p>
+<ul>
+    <li>Structured Streaming does not support schema inference.</li>
+    <li>We must infer schema before starting streaming.</li>
+    <li>Ensures schema stability and production safety.</li>
+</ul>
+
+<p><strong>Key concept</strong></p>
+<p>Batch read is used only for inspection and schema discovery, never for live processing.</p>
+
+<h4>2. Bronze Layer – Streaming Read from ADLS</h4>
+
+<p><strong>Query</strong></p>
+<pre><code class="language-python">bronze_df = spark.readStream \
+    .format("avro") \
+    .schema(static_df.schema) \
+    .option("recursiveFileLookup", "true") \
+    .load(
+        "abfss://eventhub-capture@pipelinestoragetask45.dfs.core.windows.net/event-hub45/"
+    )</code></pre>
+
+<p><strong>What this query does</strong></p>
+<ul>
+    <li>Starts a continuous streaming job.</li>
+    <li>Watches ADLS for new Avro files.</li>
+    <li>Applies a fixed schema.</li>
+</ul>
+
+<p><strong>Why this query exists</strong></p>
+<ul>
+    <li>Event Hub Capture writes files continuously.</li>
+    <li>Databricks must process them incrementally.</li>
+    <li>This is the Bronze (raw) layer.</li>
+</ul>
+
+<p><strong>Key concept</strong></p>
+<p><code>readStream</code> means “keep listening forever”.</p>
+
+<h4>3. Understanding Event Hub Capture Payload</h4>
+
+<p><strong>Data reality</strong></p>
+<p>Event Hub Capture stores:</p>
+<ul>
+    <li>Metadata columns.</li>
+    <li>Business payload inside <code>Body</code> (binary).</li>
+</ul>
+
+<p><strong>Bronze schema example</strong></p>
+<pre><code>SequenceNumber
+Offset
+EnqueuedTimeUtc
+Body (binary)</code></pre>
+
+<p><strong>Key concept</strong></p>
+<p>Business data is inside <code>Body</code>, not at top level.</p>
+
+<h4>4. Parsing JSON Payload (Silver Foundation)</h4>
+
+<p><strong>Query</strong></p>
+<pre><code class="language-python">from pyspark.sql.functions import col, from_json
+
+parsed_df = bronze_df.select(
+    from_json(col("Body").cast("string"), json_schema).alias("data")
+)
+
+silver_df = parsed_df.select("data.*")</code></pre>
+
+<p><strong>What this query does</strong></p>
+<ul>
+    <li>Converts binary payload → string.</li>
+    <li>Parses JSON using enforced schema.</li>
+    <li>Flattens JSON into columns.</li>
+</ul>
+
+<p><strong>Why this query exists</strong></p>
+<ul>
+    <li>Bronze data is not queryable.</li>
+    <li>Analytics require structured columns.</li>
+    <li>This starts the Silver layer.</li>
+</ul>
+
+<p><strong>Key concept</strong></p>
+<p>Bronze = envelope<br>
+Silver = extracted payload</p>
+
+<h4>5. Event-Time Preparation (Critical Step)</h4>
+
+<p><strong>Query</strong></p>
+<pre><code class="language-python">from pyspark.sql.functions import to_timestamp
+
+silver_df = silver_df.withColumn(
+    "event_time", to_timestamp(col("event_time"))
+)</code></pre>
+
+<p><strong>What this query does</strong></p>
+<ul>
+    <li>Converts <code>event_time</code> from string → timestamp.</li>
+</ul>
+
+<p><strong>Why this is mandatory</strong></p>
+<ul>
+    <li>Window functions require timestamps.</li>
+    <li>Watermark requires timestamps.</li>
+    <li>Strings cannot drive event-time logic.</li>
+</ul>
+
+<p><strong>Key concept</strong></p>
+<p>Event-time must be a timestamp, not text.</p>
+
+<h4>6. Watermark Definition (Late Data Handling)</h4>
+
+<p><strong>Query</strong></p>
+<pre><code class="language-python">dedup_df = silver_df \
+    .withWatermark("event_time", "10 minutes")</code></pre>
+
+<p><strong>What this query does</strong></p>
+<ul>
+    <li>Tells Spark how long to wait for late data.</li>
+    <li>Controls state retention.</li>
+</ul>
+
+<p><strong>Why watermark exists</strong></p>
+<ul>
+    <li>Streaming data may arrive late.</li>
+    <li>Spark must know when results are final.</li>
+    <li>Prevents infinite memory usage.</li>
+</ul>
+
+<p><strong>Key concept</strong></p>
+<p>Watermark = allowed lateness window.</p>
+
+<h4>7. Deduplication with Watermark (Stateful Logic)</h4>
+
+<p><strong>Query</strong></p>
+<pre><code class="language-python">dedup_df = silver_df \
+    .withWatermark("event_time", "10 minutes") \
+    .dropDuplicates(["order_id"])</code></pre>
+
+<p><strong>What this query does</strong></p>
+<ul>
+    <li>Removes duplicate records.</li>
+    <li>Uses watermark to limit state.</li>
+</ul>
+
+<p><strong>Why this query exists</strong></p>
+<ul>
+    <li>Event Hub can deliver duplicates.</li>
+    <li>Exactly-once semantics require deduplication.</li>
+</ul>
+
+<p><strong>Important rule</strong></p>
+<p>Streaming deduplication must be paired with watermark.</p>
+
+<h4>8. Window Aggregation (Gold Logic)</h4>
+
+<p><strong>Query</strong></p>
+<pre><code class="language-python">from pyspark.sql.functions import window, count
+
+agg_df = dedup_df.groupBy(
+    window(col("event_time"), "5 minutes")
+).count()</code></pre>
+
+<p><strong>What this query does</strong></p>
+<ul>
+    <li>Groups events into 5-minute time windows.</li>
+    <li>Aggregates data per window.</li>
+</ul>
+
+<p><strong>Why windowing is required</strong></p>
+<ul>
+    <li>Streaming data never ends.</li>
+    <li>Global aggregation is impossible.</li>
+    <li>Time-based grouping is the only safe approach.</li>
+</ul>
+
+<p><strong>Key concept</strong></p>
+<p>Window = finite view of infinite data.</p>
+
+<h4>9. Advanced Aggregation (Business Metrics)</h4>
+
+<p><strong>Query</strong></p>
+<pre><code class="language-python">from pyspark.sql.functions import avg
+
+agg_df = dedup_df.groupBy(
+    window(col("event_time"), "5 minutes")
+).agg(
+    avg("imdb_score").alias("avg_imdb_score"),
+    count("*").alias("movie_count")
+)</code></pre>
+
+<p><strong>What this query does</strong></p>
+<ul>
+    <li>Computes business metrics per window.</li>
+    <li>Produces analytics-ready data.</li>
+</ul>
+
+<p><strong>Layer</strong></p>
+<ul>
+    <li>This is Gold-layer logic.</li>
+</ul>
+
+<h4>10. Writing Streaming Output to Delta Lake</h4>
+
+<p><strong>Query</strong></p>
+<pre><code class="language-python">query = agg_df.writeStream \
+    .format("delta") \
+    .outputMode("append") \
+    .option(
+        "checkpointLocation",
+        "abfss://processed@pipelinestoragetask45.dfs.core.windows.net/checkpoints/movie_metrics"
+    ) \
+    .start(
+        "abfss://processed@pipelinestoragetask45.dfs.core.windows.net/gold/movie_metrics"
+    )</code></pre>
+
+<p><strong>What this query does</strong></p>
+<ul>
+    <li>Starts a long-running streaming job.</li>
+    <li>Writes finalized results to Delta Lake.</li>
+    <li>Tracks progress using checkpoint.</li>
+</ul>
+
+<p><strong>Why append mode is used</strong></p>
+<ul>
+    <li>Ensures only final window results are written.</li>
+    <li>Prevents partial updates.</li>
+</ul>
+
+<p><strong>Key concept</strong></p>
+<p>Delta + append + watermark = exactly-once streaming.</p>
+
+<h4>11. Checkpoint Mechanics (Why State Matters)</h4>
+
+<p><strong>What checkpoint stores</strong></p>
+<ul>
+    <li>Processed files.</li>
+    <li>Watermark position.</li>
+    <li>Window state.</li>
+    <li>Deduplication state.</li>
+</ul>
+
+<p><strong>Golden rule</strong></p>
+<p>Change streaming logic → change checkpoint path.</p>
+
+<p><strong>Why errors repeated earlier</strong></p>
+<ul>
+    <li>Old checkpoint remembered old logic.</li>
+    <li>Spark ignored new transformations.</li>
+    <li>Resulted in confusing behavior.</li>
+</ul>
+
+<h4>12. Why Delta Table Was Sometimes Empty</h4>
+
+<p><strong>Observation</strong></p>
+<pre><code class="language-python">spark.read.format("delta").load(...).display()
+# No rows</code></pre>
+
+<p><strong>Root cause</strong></p>
+<ul>
+    <li>All test events had the same <code>event_time</code>.</li>
+    <li>Spark waited for late data.</li>
+    <li>Window never closed.</li>
+    <li>Append mode wrote nothing.</li>
+</ul>
+
+<p><strong>Correct interpretation</strong></p>
+<p>Empty Delta does NOT mean pipeline failure.</p>
+
+<h4>13. Temporary Validation Using Processing Time</h4>
+
+<p><strong>Query (Testing Only)</strong></p>
+<pre><code class="language-python">from pyspark.sql.functions import current_timestamp
+
+silver_test_df = silver_df.withColumn(
+    "event_time", current_timestamp()
+)</code></pre>
+
+<p><strong>Why this worked</strong></p>
+<ul>
+    <li>Event time advanced continuously.</li>
+    <li>Watermark progressed.</li>
+    <li>Windows closed.</li>
+    <li>Delta output appeared.</li>
+</ul>
+
+<p><strong>Important</strong></p>
+<ul>
+    <li>This is not production logic.</li>
+    <li>Used only to validate pipeline correctness.</li>
+</ul>
+
+<h4>14. Reading Gold Delta Table (Batch)</h4>
+
+<p><strong>Query</strong></p>
+<pre><code class="language-python">gold_df = spark.read.format("delta").load(
+    "abfss://processed@pipelinestoragetask45.dfs.core.windows.net/gold/movie_metrics"
+)
+
+gold_df.display()</code></pre>
+
+<p><strong>What this query does</strong></p>
+<ul>
+    <li>Batch read of finalized results.</li>
+    <li>Used by BI tools and downstream systems.</li>
+</ul>
+
+<h4>15. Writing Gold Data to Cosmos DB</h4>
+
+<p><strong>Query</strong></p>
+<pre><code class="language-python">gold_df.write \
+    .format("cosmos.oltp") \
+    .option("spark.cosmos.accountEndpoint", "&lt;COSMOS_ENDPOINT&gt;") \
+    .option("spark.cosmos.accountKey", "&lt;COSMOS_KEY&gt;") \
+    .option("spark.cosmos.database", "analyticsdb") \
+    .option("spark.cosmos.container", "movie_metrics") \
+    .mode("append") \
+    .save()</code></pre>
+
+<p><strong>What this query does</strong></p>
+<ul>
+    <li>Publishes analytics data.</li>
+    <li>Enables low-latency serving.</li>
+    <li>Supports Fabric reporting.</li>
+</ul>
+
+<h4>16. Final Mental Model (Databricks Side)</h4>
+
+<ul>
+    <li><code>readStream</code> → infinite input.</li>
+    <li><code>withWatermark</code> → late data control.</li>
+    <li><code>window</code> → bounded aggregation.</li>
+    <li><code>dropDuplicates</code> → exactly-once.</li>
+    <li><code>writeStream</code> → continuous output.</li>
+    <li>Checkpoint → memory of the system.</li>
+    <li>Delta → safe and queryable storage.</li>
+</ul>
+
+<h4>17. One-Line Databricks Summary</h4>
+
+<p>Databricks continuously reads raw Event Hub Capture data, enforces schema, applies event-time watermarking and windowed aggregations, and writes finalized, exactly-once results into Delta tables for analytics and serving.</p>
+
+<h2 id="bronzesilvergold-layer-mapping">Bronze/Silver/Gold Layer Mapping</h2>
+
+<table>
+    <thead>
+        <tr>
+            <th>Layer</th>
+            <th>Description</th>
+            <th>Queries Involved</th>
+            <th>Tables/Paths</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Bronze</strong></td>
+            <td>Raw, unprocessed data from source. Envelope format with binary payload.</td>
+            <td>1-3</td>
+            <td>ADLS path: <code>abfss://eventhub-capture@.../event-hub45/</code></td>
+        </tr>
+        <tr>
+            <td><strong>Silver</strong></td>
+            <td>Parsed, structured data with timestamps. Ready for business logic.</td>
+            <td>4-5</td>
+            <td>In-memory streaming DF (not persisted).</td>
+        </tr>
+        <tr>
+            <td><strong>Gold</strong></td>
+            <td>Aggregated, analytics-ready metrics (e.g., avg IMDb, counts per window).</td>
+            <td>6-10, 14-15</td>
+            <td>Delta path: <code>abfss://processed@.../gold/movie_metrics</code> <br> Cosmos DB: <code>analyticsdb.movie_metrics</code></td>
+        </tr>
+    </tbody>
+</table>
+
+<h2 id="query-flow-diagram">Query Flow Diagram</h2>
+
+<p>Below is a textual representation of the query flow (use tools like Draw.io for visual diagrams in production).</p>
+
+<pre><code>Event Hub Capture (Avro Files in ADLS)
+    ↓ (Batch Read for Schema - Query 1)
+Bronze Streaming Read (Query 2)
+    ↓
+Parse JSON Payload (Query 4)
+    ↓
+Event-Time Casting (Query 5)
+    ↓ (Silver DF)
+Watermark + Deduplication (Queries 6-7)
+    ↓
+Window Aggregation (Queries 8-9)
+    ↓ (Gold DF)
+Write to Delta (Query 10) → Delta Table (Query 14)
+    ↓
+Batch Write to Cosmos DB (Query 15)</code></pre>
+
+<ul>
+    <li><strong>Testing Branch</strong>: Insert Query 13 after Query 5 for validation.</li>
+    <li><strong>Checkpoint</strong>: Applied at Write Stream (Query 10), stores state from Queries 6-9.</li>
+</ul>
+
+<h2 id="production-checklist">Production Checklist</h2>
+
+<p>To deploy without cutting corners:</p>
+
+<ol>
+    <li><strong>Environment Setup</strong>:
+        <ul>
+            <li>Verify ADLS mounts and permissions.</li>
+            <li>Configure secrets for Cosmos DB.</li>
+        </ul>
+    </li>
+    <li><strong>Schema Validation</strong>:
+        <ul>
+            <li>Run Query 1 and confirm <code>json_schema</code> matches expected (e.g., <code>order_id</code>, <code>event_time</code>, <code>imdb_score</code>).</li>
+        </ul>
+    </li>
+    <li><strong>Streaming Job</strong>:
+        <ul>
+            <li>Start with new checkpoint path.</li>
+            <li>Set watermark to match expected latency (e.g., 10 minutes).</li>
+            <li>Use <code>outputMode("append")</code> for immutable outputs.</li>
+        </ul>
+    </li>
+    <li><strong>Monitoring</strong>:
+        <ul>
+            <li>Enable Databricks alerts for job failures.</li>
+            <li>Monitor watermark progress and state size.</li>
+            <li>Check for duplicates pre/post-deduplication.</li>
+        </ul>
+    </li>
+    <li><strong>Testing</strong>:
+        <ul>
+            <li>Simulate late data: Send events with delayed <code>event_time</code>.</li>
+            <li>Validate empty table scenario (Query 12).</li>
+            <li>Use processing time override (Query 13) for quick checks.</li>
+        </ul>
+    </li>
+    <li><strong>Scaling</strong>:
+        <ul>
+            <li>Auto-scale cluster based on input rate.</li>
+            <li>Optimize window size (5 minutes) for business needs.</li>
+        </ul>
+    </li>
+    <li><strong>Recovery</strong>:
+        <ul>
+            <li>If logic changes, delete old checkpoint.</li>
+            <li>Use Delta versioning for rollbacks.</li>
+        </ul>
+    </li>
+    <li><strong>Security</strong>:
+        <ul>
+            <li>Use managed identities for ADLS/Cosmos access.</li>
+            <li>Encrypt sensitive fields if present.</li>
+        </ul>
+    </li>
+    <li><strong>Cost Optimization</strong>:
+        <ul>
+            <li>Use spot instances for non-prod.</li>
+            <li>Schedule jobs if not 24/7.</li>
+        </ul>
+    </li>
+    <li><strong>Documentation</strong>:
+        <ul>
+            <li>Update this README with any customizations.</li>
+        </ul>
+    </li>
+</ol>
+
+<h2 id="troubleshooting">Troubleshooting</h2>
+
+<ul>
+    <li><strong>No Data in Delta</strong>: Check watermark (Query 12). Ensure event times vary.</li>
+    <li><strong>Schema Mismatch</strong>: Rerun Query 1 and update <code>json_schema</code>.</li>
+    <li><strong>Duplicates</strong>: Verify deduplication key (<code>order_id</code>) is unique.</li>
+    <li><strong>Job Fails on Restart</strong>: Change checkpoint path (Query 11).</li>
+    <li><strong>Late Data Ignored</strong>: Adjust watermark delay.</li>
+    <li><strong>Cosmos Write Errors</strong>: Check RU provisioning and keys.</li>
+</ul>
+
+<p>For more, refer to Databricks docs on Structured Streaming.</p>
+
+<h2 id="contributing">Contributing</h2>
+
+<p>Contributions welcome! Fork the repo, create a branch, and submit a PR. Follow standard GitHub flow.</p>
+
+<ul>
+    <li>Issues: Report bugs or suggest features.</li>
+    <li>Code Style: PEP8 for Python.</li>
+    <li>Tests: Add unit tests for custom functions.</li>
+</ul>
+
+<h2 id="license">License</h2>
+
+<p>MIT License. See <a href="LICENSE">LICENSE</a> for details.</p>
+
+</body>
+</html>
