@@ -2,16 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Understanding Databricks and Delta Lake</title>
+<title>Databricks Practical Guide</title>
 
 <style>
+
 body{
-font-family: Arial, Helvetica, sans-serif;
-max-width: 1100px;
+font-family: Arial;
+max-width:1100px;
 margin:auto;
-line-height:1.6;
-background:#fafafa;
 padding:40px;
+background:#fafafa;
+line-height:1.6;
 color:#222;
 }
 
@@ -19,15 +20,10 @@ h1,h2,h3{
 color:#1e293b;
 }
 
-h1{
-border-bottom:3px solid #e2e8f0;
-padding-bottom:10px;
-}
-
 code{
 background:#f1f5f9;
-padding:4px 6px;
-border-radius:5px;
+padding:3px 6px;
+border-radius:4px;
 }
 
 pre{
@@ -42,35 +38,33 @@ overflow:auto;
 background:#f8fafc;
 border:1px solid #e2e8f0;
 padding:15px;
-margin:20px 0;
-font-family: monospace;
+font-family:monospace;
 white-space:pre;
-}
-
-table{
-border-collapse:collapse;
-width:100%;
 margin:20px 0;
-}
-
-th,td{
-border:1px solid #e2e8f0;
-padding:10px;
-text-align:left;
-}
-
-th{
-background:#e2e8f0;
 }
 
 .section{
-margin-top:50px;
+margin-top:60px;
+}
+
+.problem{
+background:#fff7ed;
+padding:15px;
+border-left:5px solid #f97316;
+margin:20px 0;
+}
+
+.solution{
+background:#ecfeff;
+padding:15px;
+border-left:5px solid #06b6d4;
+margin:20px 0;
 }
 
 .note{
 background:#eef2ff;
-padding:12px;
-border-left:4px solid #6366f1;
+padding:15px;
+border-left:5px solid #6366f1;
 margin:20px 0;
 }
 
@@ -79,142 +73,71 @@ margin:20px 0;
 
 <body>
 
-<h1>Complete Guide to Databricks and Delta Lake</h1>
+<h1>Databricks Problem Solving Guide</h1>
 
 <p>
-This document explains the core concepts behind Databricks and the Lakehouse architecture.
-The goal is to help a reader understand how data flows from raw files to analytics-ready datasets.
+This guide is designed for engineers who get confused while working in Databricks.
+Whenever you are stuck, follow this document step-by-step.
 </p>
 
 <hr>
 
 <div class="section">
-<h2>1. What Databricks Actually Is</h2>
 
-<p>
-Databricks is a cloud platform built on Apache Spark that helps engineers process, manage,
-and analyze large amounts of data.
-</p>
-
-<p>
-However, Databricks itself does not store your data. The data lives in cloud storage systems
-such as S3, ADLS, or Google Cloud Storage. Databricks provides the compute engine and management layer.
-</p>
-
-<h3>Basic Architecture</h3>
+<h2>1. Mental Model (Most Important)</h2>
 
 <div class="diagram">
-                +--------------------+
-                |     BI Tools       |
-                | (PowerBI/Tableau)  |
-                +----------+---------+
-                           |
-                    SQL Warehouse
-                           |
-                 +---------+---------+
-                 |    Databricks     |
-                 |  Spark Clusters   |
-                 +---------+---------+
-                           |
-                     Unity Catalog
-                           |
-                 +---------+---------+
-                 |    Cloud Storage  |
-                 |  S3 / ADLS / GCS  |
-                 +-------------------+
-</div>
 
-<p>
-Think of Databricks as the compute engine that reads and writes data stored in the cloud.
-</p>
+Databricks = Compute Engine
 
-</div>
+Data Lives In:
 
-<hr>
+Cloud Storage
+   |
+   +-- Parquet files
+   +-- Delta Tables
 
-<div class="section">
-<h2>2. Where the Data Is Actually Stored</h2>
-
-<p>
-The physical data files are stored in cloud object storage.
-</p>
-
-<table>
-<tr>
-<th>Cloud Provider</th>
-<th>Storage System</th>
-<th>Example Path</th>
-</tr>
-
-<tr>
-<td>AWS</td>
-<td>S3</td>
-<td>s3://company-datalake/orders/</td>
-</tr>
-
-<tr>
-<td>Azure</td>
-<td>ADLS Gen2</td>
-<td>abfss://data@company.dfs.core.windows.net/orders/</td>
-</tr>
-
-<tr>
-<td>Google Cloud</td>
-<td>GCS</td>
-<td>gs://company-datalake/orders/</td>
-</tr>
-</table>
-
-<p>
-These locations store the actual files such as Parquet data and Delta transaction logs.
-</p>
-
-</div>
-
-<hr>
-
-<div class="section">
-<h2>3. Unity Catalog (Data Governance Layer)</h2>
-
-<p>
-Unity Catalog is the centralized governance system used by Databricks.
-It organizes and secures all data assets.
-</p>
-
-<div class="diagram">
 Unity Catalog
-     |
-     +-- Catalog
-           |
-           +-- Schema (Database)
-                  |
-                  +-- Tables
-                  +-- Views
-                  +-- Functions
-                  +-- Volumes
+   |
+   +-- Catalog
+        |
+        +-- Schema
+              |
+              +-- Tables
+
 </div>
 
-<h3>Example</h3>
-
-<pre>
-analytics.sales.orders
-</pre>
-
 <p>
-This means:
+
+Remember this rule:
+
 </p>
 
-<ul>
-<li>Catalog: analytics</li>
-<li>Schema: sales</li>
-<li>Table: orders</li>
-</ul>
+<div class="note">
 
-<p>
-Unity Catalog allows fine-grained access control.</p>
+Databricks does NOT store your data.  
+It only processes the data stored in cloud storage.
+
+</div>
+
+</div>
+
+<hr>
+
+<div class="section">
+
+<h2>2. Quick Start Workflow (Follow This Always)</h2>
+
+<p>If you want to build a table in Databricks follow this order.</p>
 
 <pre>
-GRANT SELECT ON TABLE analytics.sales.orders TO analysts;
+
+Step 1 → Create Catalog
+Step 2 → Create Schema
+Step 3 → Create Delta Table
+Step 4 → Insert Data
+Step 5 → Query Data
+
 </pre>
 
 </div>
@@ -222,145 +145,115 @@ GRANT SELECT ON TABLE analytics.sales.orders TO analysts;
 <hr>
 
 <div class="section">
-<h2>4. Tables in Databricks</h2>
 
-<p>
-Tables represent structured datasets that can be queried using SQL.
-</p>
+<h2>3. Step 1 — Create Catalog</h2>
 
-<h3>Two types exist:</h3>
+<pre>
 
-<ul>
-<li>Managed Tables</li>
-<li>External Tables</li>
-</ul>
+CREATE CATALOG company_data;
+
+</pre>
+
+Check catalogs:
+
+<pre>
+
+SHOW CATALOGS;
+
+</pre>
+
+Use catalog:
+
+<pre>
+
+USE CATALOG company_data;
+
+</pre>
 
 </div>
 
 <hr>
 
 <div class="section">
-<h2>5. Managed Tables</h2>
 
-<p>
-Managed tables are fully controlled by Databricks.
-</p>
+<h2>4. Step 2 — Create Schema</h2>
 
 <pre>
-CREATE TABLE sales.orders (
+
+CREATE SCHEMA sales;
+
+</pre>
+
+Check schemas:
+
+<pre>
+
+SHOW SCHEMAS;
+
+</pre>
+
+Use schema:
+
+<pre>
+
+USE SCHEMA sales;
+
+</pre>
+
+</div>
+
+<hr>
+
+<div class="section">
+
+<h2>5. Step 3 — Create Delta Table</h2>
+
+<pre>
+
+CREATE TABLE orders (
 order_id INT,
-amount DOUBLE
-);
+product STRING,
+price INT
+)
+USING DELTA;
+
 </pre>
 
-<p>
-Databricks automatically decides where the data files will be stored.
-</p>
-
-<h3>Behavior</h3>
-
-<ul>
-<li>Storage location managed automatically</li>
-<li>Dropping the table deletes the data</li>
-<li>Best for internal pipelines</li>
-</ul>
-
-</div>
-
-<hr>
-
-<div class="section">
-<h2>6. External Tables</h2>
-
-<p>
-External tables reference data stored in a location you specify.
-</p>
+Query table:
 
 <pre>
-CREATE TABLE sales.orders
-USING DELTA
-LOCATION 's3://company-data/orders/';
+
+SELECT * FROM orders;
+
 </pre>
-
-<h3>Behavior</h3>
-
-<ul>
-<li>Data location is user controlled</li>
-<li>Dropping the table does not delete files</li>
-<li>Common for shared data lakes</li>
-</ul>
 
 </div>
 
 <hr>
 
 <div class="section">
-<h2>7. What Delta Lake Is</h2>
 
-<p>
-Delta Lake is the default storage format used by Databricks.
-</p>
-
-<p>
-It builds on Parquet but adds reliability features such as transactions,
-schema enforcement, and time travel.
-</p>
-
-<h3>Delta Table Folder Structure</h3>
+<h2>6. What USING DELTA Actually Does</h2>
 
 <div class="diagram">
+
 orders/
 
    part-0001.parquet
    part-0002.parquet
-   part-0003.parquet
 
    _delta_log/
-        000000000000.json
-        000000000001.json
-        000000000002.json
-</div>
-
-<p>
-Parquet files store the data while the transaction log tracks changes.
-</p>
+       000000.json
+       000001.json
 
 </div>
 
-<hr>
-
-<div class="section">
-<h2>8. Delta Lake Transaction Log</h2>
-
 <p>
-The <code>_delta_log</code> folder contains metadata about every operation.
-</p>
 
-<table>
-<tr>
-<th>File</th>
-<th>Meaning</th>
-</tr>
+Parquet files store the data.
 
-<tr>
-<td>000000000000.json</td>
-<td>Table creation</td>
-</tr>
+_delta_log tracks changes.
 
-<tr>
-<td>000000000001.json</td>
-<td>Data inserted</td>
-</tr>
-
-<tr>
-<td>000000000002.json</td>
-<td>Update operation</td>
-</tr>
-
-</table>
-
-<p>
-This enables features such as ACID transactions and version history.
 </p>
 
 </div>
@@ -368,103 +261,252 @@ This enables features such as ACID transactions and version history.
 <hr>
 
 <div class="section">
-<h2>9. Time Travel</h2>
 
-<p>
-Delta Lake allows querying previous versions of a table.
-</p>
+<h2>7. Managed vs External Table</h2>
+
+<h3>Managed Table</h3>
 
 <pre>
-SELECT *
-FROM sales.orders VERSION AS OF 3;
+
+CREATE TABLE orders(
+id INT,
+product STRING
+)
+USING DELTA;
+
 </pre>
 
-<p>
-This is extremely useful for debugging data pipelines.
-</p>
+Behavior:
+
+<ul>
+<li>Databricks controls storage</li>
+<li>DROP TABLE deletes data</li>
+</ul>
+
+<h3>External Table</h3>
+
+<pre>
+
+CREATE TABLE orders
+USING DELTA
+LOCATION '/mnt/orders';
+
+</pre>
+
+Behavior:
+
+<ul>
+<li>You control storage location</li>
+<li>DROP TABLE keeps data</li>
+</ul>
 
 </div>
 
 <hr>
 
 <div class="section">
-<h2>10. Data Lakehouse Medallion Architecture</h2>
 
-<p>
-Databricks pipelines usually follow a layered structure called the
-Medallion Architecture.
-</p>
+<h2>8. How to See Where Data Is Stored</h2>
+
+Run this:
+
+<pre>
+
+DESCRIBE DETAIL orders;
+
+</pre>
+
+This shows:
+
+<ul>
+
+<li>table format</li>
+<li>storage location</li>
+<li>table size</li>
+
+</ul>
+
+</div>
+
+<hr>
+
+<div class="section">
+
+<h2>9. Debugging Checklist</h2>
+
+If something fails follow this checklist.
+
+<div class="problem">
+
+Problem: Table not found
+
+</div>
+
+<div class="solution">
+
+Check catalog:
+
+SHOW CATALOGS
+
+Check schema:
+
+SHOW SCHEMAS
+
+Check tables:
+
+SHOW TABLES
+
+</div>
+
+
+<div class="problem">
+
+Problem: Data not showing
+
+</div>
+
+<div class="solution">
+
+Check table history
+
+DESCRIBE HISTORY orders
+
+</div>
+
+
+<div class="problem">
+
+Problem: Wrong table location
+
+</div>
+
+<div class="solution">
+
+Check storage path
+
+DESCRIBE DETAIL orders
+
+</div>
+
+</div>
+
+<hr>
+
+<div class="section">
+
+<h2>10. Important Delta Commands</h2>
+
+Insert Data
+
+<pre>
+
+INSERT INTO orders VALUES
+(1,'Laptop',50000),
+(2,'Phone',20000);
+
+</pre>
+
+Update
+
+<pre>
+
+UPDATE orders
+SET price = 60000
+WHERE product='Laptop';
+
+</pre>
+
+Delete
+
+<pre>
+
+DELETE FROM orders
+WHERE order_id=2;
+
+</pre>
+
+</div>
+
+<hr>
+
+<div class="section">
+
+<h2>11. Delta Time Travel</h2>
+
+View table history:
+
+<pre>
+
+DESCRIBE HISTORY orders;
+
+</pre>
+
+Query old version:
+
+<pre>
+
+SELECT * FROM orders VERSION AS OF 0;
+
+</pre>
+
+</div>
+
+<hr>
+
+<div class="section">
+
+<h2>12. Medallion Architecture</h2>
 
 <div class="diagram">
+
 Raw Data
    |
    v
-Bronze Layer
+Bronze
    |
    v
-Silver Layer
+Silver
    |
    v
-Gold Layer
+Gold
+
 </div>
+
+<p>
+
+Bronze → raw data  
+Silver → cleaned data  
+Gold → business analytics  
+
+</p>
 
 </div>
 
 <hr>
 
 <div class="section">
-<h2>11. Bronze Layer (Raw Data)</h2>
 
-<p>
-Bronze tables store raw data exactly as it arrives.
-</p>
-
-Examples:
-<ul>
-<li>API responses</li>
-<li>CSV files</li>
-<li>Kafka streams</li>
-<li>logs</li>
-</ul>
-
-Example table:
+<h2>13. Full End-to-End Example</h2>
 
 <pre>
-bronze.transactions_raw
-</pre>
 
-Characteristics:
+CREATE CATALOG demo;
 
-<ul>
-<li>Minimal transformation</li>
-<li>Append-only ingestion</li>
-<li>Used for auditing</li>
-</ul>
+CREATE SCHEMA demo.sales;
 
-</div>
+CREATE TABLE demo.sales.orders
+(
+id INT,
+product STRING,
+price INT
+)
+USING DELTA;
 
-<hr>
+INSERT INTO demo.sales.orders
+VALUES (1,'Laptop',50000);
 
-<div class="section">
-<h2>12. Silver Layer (Clean Data)</h2>
+SELECT * FROM demo.sales.orders;
 
-<p>
-Silver tables contain cleaned and standardized data.
-</p>
-
-Typical processing includes:
-
-<ul>
-<li>Removing duplicates</li>
-<li>Fixing schemas</li>
-<li>Filtering bad records</li>
-<li>Joining datasets</li>
-</ul>
-
-Example:
-
-<pre>
-silver.transactions_clean
 </pre>
 
 </div>
@@ -472,110 +514,33 @@ silver.transactions_clean
 <hr>
 
 <div class="section">
-<h2>13. Gold Layer (Business Data)</h2>
 
-<p>
-Gold tables are optimized for analytics and reporting.
-</p>
-
-Examples:
-
-<ul>
-<li>Daily revenue</li>
-<li>Customer metrics</li>
-<li>Aggregated KPIs</li>
-</ul>
-
-Example:
-
-<pre>
-gold.daily_sales
-</pre>
-
-These tables feed dashboards and BI tools.
-</div>
-
-<hr>
-
-<div class="section">
-<h2>14. Example Data Pipeline</h2>
+<h2>14. Final Mental Model</h2>
 
 <div class="diagram">
-CSV files in S3
-      |
-      v
-Bronze Table (raw ingestion)
-      |
-      v
-Silver Table (cleaned data)
-      |
-      v
-Gold Table (aggregated metrics)
-      |
-      v
-BI Dashboard
-</div>
 
-</div>
-
-<hr>
-
-<div class="section">
-<h2>15. Putting Everything Together</h2>
-
-<div class="diagram">
-Cloud Storage (S3 / ADLS / GCS)
-        |
-        +-- Delta Tables
-        |      |
-        |      +-- Parquet Data Files
-        |      +-- _delta_log
-        |
-        +-- Raw Files
-               |
-               +-- CSV
-               +-- JSON
-               +-- Images
+Databricks
+   |
+   +-- Compute (Spark)
 
 Unity Catalog
+   |
+   +-- Catalog
         |
-        +-- Catalog
+        +-- Schema
              |
-             +-- Schema
-                   |
-                   +-- Tables
-                   +-- Views
-                   +-- Volumes
+             +-- Tables
 
-Databricks Compute
+Storage
+   |
+   +-- Delta Tables
         |
-        +-- Spark Clusters
-        +-- SQL Warehouse
-</div>
+        +-- Parquet files
+        +-- _delta_log
 
 </div>
 
-<hr>
-
-<div class="section">
-<h2>16. Key Takeaways</h2>
-
-<ul>
-<li>Databricks is a compute platform built on Spark.</li>
-<li>Actual data lives in cloud storage systems.</li>
-<li>Unity Catalog manages metadata and permissions.</li>
-<li>Delta Lake provides reliable tables with transaction logs.</li>
-<li>Medallion architecture organizes data into Bronze, Silver, and Gold layers.</li>
-</ul>
-
 </div>
-
-<hr>
-
-<p>
-This document can serve as a reference for engineers learning how modern data
-platforms work using the Lakehouse architecture.
-</p>
 
 </body>
 </html>
